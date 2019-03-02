@@ -766,3 +766,34 @@ fn typing_inside_a_function_inside_a_macro_should_not_invalidate_item_map() {
         ",
     );
 }
+
+#[test]
+#[ignore]
+fn item_map_contains_items_from_expansion() {
+    let (item_map, module_id) = item_map(
+        "
+        //- /lib.rs
+        mod foo;
+
+        use crate::foo::*;
+        <|>
+        //- /foo.rs
+        macro_rules! structs {
+            ($($i:ident),*) => {
+                $(pub struct $i { field: u32 } )*
+            }
+        }
+
+        structs!(Foo, Bar);
+
+    ",
+    );
+    check_module_item_map(
+        &item_map,
+        module_id,
+        "
+            Foo: t v
+            Bar: t v
+        ",
+    );
+}
