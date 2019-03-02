@@ -16,6 +16,8 @@
 //! structure itself is modified.
 pub(crate) mod lower;
 
+mod crate_def_map;
+
 use std::{time, sync::Arc};
 
 use rustc_hash::{FxHashMap, FxHashSet};
