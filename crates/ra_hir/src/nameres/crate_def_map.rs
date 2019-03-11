@@ -4,7 +4,7 @@
 ///
 ///   * a tree of modules for the crate
 ///   * for each module, a set of items visible in the module (directly declared
-///     or imported) 
+///     or imported)
 ///
 /// Note that `CrateDefMap` contains fully macro expanded code.
 ///
@@ -13,7 +13,7 @@
 ///
 ///   * recursive parsing of modules (macros can generate `mod foo;`
 ///     declarations, causing us to go and parse the file)
-///   * name resolution for import and macro paths 
+///   * name resolution for import and macro paths
 ///   * macro expansion
 ///
 /// A "naive" algorithm to compute `CrateDefMap` would just do the above
@@ -32,7 +32,7 @@
 /// make it more efficient, we need to introduce intermediate queries between
 /// `CrateDefMap` and raw syntax. Roughtly speaking, typing inside the function
 /// should not affect `CrateDefMap`, as it depends only on the top-level items &
-/// macros. So 
+/// macros. So
 ///
 /// Specifically, we don't parse the file directly but ask for a set of
 /// `RawItem`s, where `RawItem` is a position-independent representation of a
@@ -50,13 +50,13 @@
 /// item, but with one serious limitation. Because input token trees are a part
 /// of `RawItem`s, typing inside an item decorated by macro does invalidate
 /// stuff. This limitation can be partially fixed by storing a stable instead
-/// the token tree itself. That is, we can introduce a query like 
+/// the token tree itself. That is, we can introduce a query like
 ///
 /// ```
 /// expand_macro(
-///     containing_file: FileId, 
-///     macro_id: u32, // the nth macro in a file. 
-///                    // Together with `FileId`, uniquely identifies 
+///     containing_file: FileId,
+///     macro_id: u32, // the nth macro in a file.
+///                    // Together with `FileId`, uniquely identifies
 ///                    // the source token treee,
 ///     macro_def: MacroDef,
 /// ) -> Vec<RawItem>
@@ -73,103 +73,28 @@
 /// words, if we create a query `expand nth macro in X module`, it will depend
 /// on `CrateDefMap` query, so using it from `CrateDefMap` will lead to cycle.
 
+mod collector;
+
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+use ra_db::FileId;
 use ra_arena::{Arena, ArenaId, impl_arena_id, RawId};
 use ra_syntax::{AstNode, ast::{self, ModuleItemOwner}};
 
 use crate::{Crate, PersistentHirDatabase, HirFileId, Name};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct ModuleId(RawId);
-impl_arena_id!(ModuleId);
+struct ModuleIndex(RawId);
+impl_arena_id!(ModuleIndex);
 
 #[derive(Default)]
-struct ModuleData {}
+struct ModuleData {
+    children: FxHashMap<Name, ModuleIndex>,
+}
 
 /// Contans all top-level defs from a macro-expanded crate
 #[derive(Default)]
 pub(crate) struct CrateDefMap {
-    modules: Arena<ModuleId, ModuleData>,
-}
-
-impl CrateDefMap {
-    pub(crate) fn crate_def_map_query(
-        db: &impl PersistentHirDatabase,
-        krate: Crate,
-    ) -> Arc<CrateDefMap> {
-        let mut collector = DefCollector { db, krate, def_map: CrateDefMap::default() };
-        collector.collect();
-        let def_map = collector.finish();
-        Arc::new(def_map)
-    }
-}
-
-struct DefCollector<DB> {
-    db: DB,
-    krate: Crate,
-    def_map: CrateDefMap,
-}
-
-impl<'a, DB> DefCollector<&'a DB>
-where
-    DB: PersistentHirDatabase,
-{
-    fn collect(&mut self) {
-        let crate_graph = self.db.crate_graph();
-        let file_id = crate_graph.crate_root(self.krate.crate_id());
-        let raw_items = file_items_query(self.db, file_id);
-        let module_id = self.def_map.modules.alloc(ModuleData::default());
-        self.collect_module(module_id, file_items);
-    }
-
-    fn collect_module<'s>(
-        &mut self,
-        module_id: ModuleId,
-        items: RawItems,
-    ) {
-        for item in RawItems {
-            match item {
-                RawItem::Module(m) => {
-                    match m {
-                        RawModule::Definition(name, raw_items) => {
-                            let module_id = self.child_module(module_id, name);
-                            self.collect_module(module_id, raw_items)
-                        }
-                        RawModule::Declaraion(name) => {
-                            let module_id = self.child_module(module_id, name);
-                            let file_id = self.resolve_module(name);
-                            let raw_items = file_items_query(self.db, file_id);
-                            self.collect_module(module_id, raw_items)
-                        }
-                    }
-                }
-                RawItem::Import(im) => {
-                    self.unresolved_imports.insert(module_id, im)
-                }
-                RawItem::Def(def) => {
-                    self.define_item(module_id, def)
-                }
-                RawItem::Macro(path, body) => {
-                    self.unresolved_macros.insert(module_id, path, body)
-                }
-            }
-        }
-    }
-
-    fn child_module(parent: ModuleId, name: Name) -> ModuleId {
-        unimplemented!()
-    }
-
-    fn finish(self) -> CrateDefMap {
-        self.def_map
-    }
-}
-
-struct RawItems {
-
-}
-
-fn file_items_query(db: &impl PersistentHirDatabase, file_id: HirFileId) -> RawItems {
-    Vec::new()
+    modules: Arena<ModuleIndex, ModuleData>,
 }
