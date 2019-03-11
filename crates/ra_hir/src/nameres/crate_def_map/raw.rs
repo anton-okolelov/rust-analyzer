@@ -1,7 +1,8 @@
 use ra_db::FileId;
-use ra_arena::{Arena, ArenaId, impl_arena_id, RawId};
+use ra_arena::{Arena, ArenaId, impl_arena_id, RawId, map::ArenaMap};
 use ra_syntax::{
-    ast::{self, ModuleItemOwner, NameOwner},
+    AstPtr,
+    ast::{self, ModuleItemOwner, NameOwner, AttrsOwner},
 };
 
 use crate::{PersistentHirDatabase, Name, AsName, Path};
@@ -14,6 +15,11 @@ struct RawItems {
     macros: Arena<Macro, MacroData>,
 
     items: Vec<RawItem>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RawItemsSourceMap {
+    imports: ArenaMap<Import, AstPtr<ast::PathSegment>>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -34,7 +40,7 @@ enum ModuleData {
     Definition { name: Name, items: Vec<RawItem> },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Import(RawId);
 impl_arena_id!(Import);
 
@@ -74,25 +80,68 @@ fn raw_items_query(db: &impl PersistentHirDatabase, file_id: FileId) -> RawItems
 }
 
 impl RawItems {
-    fn process_module(&mut self, module: Option<Module>, body: &impl ast::ModuleItemOwner) {
+    fn process_module(&mut self, current_module: Option<Module>, body: &impl ast::ModuleItemOwner) {
         for item_or_macro in body.items_with_macros() {
             match item_or_macro {
-                ast::ItemOrMacro::Item(item) => {
-                    if let Some(raw_item) = self.alloc_raw_item(item) {
-                        self.push_item(module, raw_item)
+                ast::ItemOrMacro::Item(item) => match item.kind() {
+                    ast::ModuleItemKind::Module(module) => self.add_module(current_module, module),
+                    ast::ModuleItemKind::UseItem(use_item) => {
+                        self.add_use_item(current_module, use_item)
                     }
-                }
+                    ast::ModuleItemKind::StructDef(_) => (),
+                    ast::ModuleItemKind::EnumDef(_) => (),
+                    ast::ModuleItemKind::FnDef(_) => (),
+                    ast::ModuleItemKind::TraitDef(_) => (),
+                    ast::ModuleItemKind::TypeAliasDef(_) => (),
+                    ast::ModuleItemKind::ImplBlock(_) => (),
+                    ast::ModuleItemKind::ExternCrateItem(_) => (),
+                    ast::ModuleItemKind::ConstDef(_) => (),
+                    ast::ModuleItemKind::StaticDef(_) => (),
+                },
                 ast::ItemOrMacro::Macro(m) => {
                     if let Some(m) = self.alloc_macro(m) {
-                        self.push_item(module, RawItem::Macro(m))
+                        self.push_item(current_module, RawItem::Macro(m))
                     }
                 }
             }
         }
     }
 
-    fn push_item(&mut self, module: Option<Module>, item: RawItem) {
-        match module {
+    fn add_module(&mut self, current_module: Option<Module>, module: &ast::Module) {
+        let name = match module.name() {
+            Some(it) => it.as_name(),
+            None => return,
+        };
+        let item = if module.has_semi() {
+            self.modules.alloc(ModuleData::Declaration { name })
+        } else if let Some(item_list) = module.item_list() {
+            let item = self.modules.alloc(ModuleData::Definition { name, items: Vec::new() });
+            self.process_module(Some(item), item_list);
+            item
+        } else {
+            return;
+        };
+        self.push_item(current_module, RawItem::Module(item));
+    }
+
+    fn add_use_item(&mut self, current_module: Option<Module>, use_item: &ast::UseItem) {
+        let is_prelude = use_item
+            .attrs()
+            .any(|attr| attr.as_atom().map(|s| s == "prelude_import").unwrap_or(false));
+
+        Path::expand_use_item(use_item, |path, segment, alias| {
+            let import = self.imports.alloc(ImportData {
+                path,
+                alias,
+                is_glob: segment.is_none(),
+                is_prelude,
+                is_extern_crate: false,
+            });
+        })
+    }
+
+    fn push_item(&mut self, current_module: Option<Module>, item: RawItem) {
+        match current_module {
             Some(module) => match &mut self.modules[module] {
                 ModuleData::Definition { items, .. } => items,
                 ModuleData::Declaration { .. } => unreachable!(),
@@ -100,34 +149,6 @@ impl RawItems {
             None => &mut self.items,
         }
         .push(item)
-    }
-
-    fn alloc_raw_item(&mut self, ast: &ast::ModuleItem) -> Option<RawItem> {
-        match ast.kind() {
-            ast::ModuleItemKind::Module(m) => {
-                let name: Name = m.name()?.as_name();
-                let item = if m.has_semi() {
-                    self.modules.alloc(ModuleData::Declaration { name })
-                } else {
-                    let item =
-                        self.modules.alloc(ModuleData::Definition { name, items: Vec::new() });
-
-                    item
-                };
-                return Some(RawItem::Module(item));
-            }
-            ast::ModuleItemKind::UseItem(_) => (),
-            ast::ModuleItemKind::StructDef(_) => (),
-            ast::ModuleItemKind::EnumDef(_) => (),
-            ast::ModuleItemKind::FnDef(_) => (),
-            ast::ModuleItemKind::TraitDef(_) => (),
-            ast::ModuleItemKind::TypeAliasDef(_) => (),
-            ast::ModuleItemKind::ImplBlock(_) => (),
-            ast::ModuleItemKind::ExternCrateItem(_) => (),
-            ast::ModuleItemKind::ConstDef(_) => (),
-            ast::ModuleItemKind::StaticDef(_) => (),
-        }
-        None
     }
 
     fn alloc_macro(&mut self, m: &ast::MacroCall) -> Option<Macro> {
