@@ -73,24 +73,3 @@ where
         self.def_map
     }
 }
-
-type RawItems = Vec<RawItem>;
-
-enum RawItem {
-    Module(RawModule),
-    Import(RawImport),
-    Def(RawImport),
-    Macro(RawImport),
-}
-
-enum RawModule {
-    Definition { name: Name, raw_items: RawItems },
-    Declaration { name: Name },
-}
-struct RawImport;
-struct RawDef;
-struct RawMacro;
-
-fn raw_items_query(db: &impl PersistentHirDatabase, file_id: FileId) -> RawItems {
-    unimplemented!()
-}

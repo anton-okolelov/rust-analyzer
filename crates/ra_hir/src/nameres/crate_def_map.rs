@@ -73,7 +73,8 @@
 /// words, if we create a query `expand nth macro in X module`, it will depend
 /// on `CrateDefMap` query, so using it from `CrateDefMap` will lead to cycle.
 
-mod collector;
+mod raw;
+// mod collector;
 
 use std::sync::Arc;
 
