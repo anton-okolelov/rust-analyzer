@@ -98,11 +98,7 @@ impl RawItems {
                     ast::ModuleItemKind::ConstDef(_) => (),
                     ast::ModuleItemKind::StaticDef(_) => (),
                 },
-                ast::ItemOrMacro::Macro(m) => {
-                    if let Some(m) = self.alloc_macro(m) {
-                        self.push_item(current_module, RawItem::Macro(m))
-                    }
-                }
+                ast::ItemOrMacro::Macro(m) => self.add_macro(current_module, m),
             }
         }
     }
@@ -140,6 +136,18 @@ impl RawItems {
         })
     }
 
+    fn add_macro(&mut self, current_module: Option<Module>, m: &ast::MacroCall) {
+        if let Some((path, arg)) = (|| {
+            let path = m.path().and_then(Path::from_ast)?;
+            let tt = m.token_tree()?;
+            let arg = mbe::ast_to_token_tree(tt)?.0;
+            Some((path, arg))
+        })() {
+            let m = self.macros.alloc(MacroData { path, arg });
+            self.push_item(current_module, RawItem::Macro(m));
+        }
+    }
+
     fn push_item(&mut self, current_module: Option<Module>, item: RawItem) {
         match current_module {
             Some(module) => match &mut self.modules[module] {
@@ -149,13 +157,5 @@ impl RawItems {
             None => &mut self.items,
         }
         .push(item)
-    }
-
-    fn alloc_macro(&mut self, m: &ast::MacroCall) -> Option<Macro> {
-        let path = m.path().and_then(Path::from_ast)?;
-        let tt = m.token_tree()?;
-        let arg = mbe::ast_to_token_tree(tt)?.0;
-        let res = self.macros.alloc(MacroData { path, arg });
-        Some(res)
     }
 }
