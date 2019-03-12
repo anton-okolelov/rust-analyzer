@@ -1,13 +1,15 @@
+use std::sync::Arc;
+
 use ra_db::FileId;
-use ra_arena::{Arena, ArenaId, impl_arena_id, RawId, map::ArenaMap};
+use ra_arena::{Arena, impl_arena_id, RawId, map::ArenaMap};
 use ra_syntax::{
-    AstPtr,
+    AstPtr, AstNode,
     ast::{self, ModuleItemOwner, NameOwner, AttrsOwner},
 };
 
 use crate::{
     PersistentHirDatabase, Name, AsName, Path,
-    ids::SourceFileItemId,
+    ids::{SourceFileItemId, SourceFileItems},
 };
 
 #[derive(Default, PartialEq, Eq)]
@@ -89,13 +91,21 @@ struct MacroData {
 }
 
 fn raw_items_query(db: &impl PersistentHirDatabase, file_id: FileId) -> RawItems {
-    let mut res = RawItems::default();
+    let mut collector = RawItemsCollector {
+        raw_items: RawItems::default(),
+        source_file_items: db.file_items(file_id.into()),
+    };
     let source_file = db.parse(file_id);
-    res.process_module(None, &*source_file);
-    res
+    collector.process_module(None, &*source_file);
+    collector.raw_items
 }
 
-impl RawItems {
+struct RawItemsCollector {
+    raw_items: RawItems,
+    source_file_items: Arc<SourceFileItems>,
+}
+
+impl RawItemsCollector {
     fn process_module(&mut self, current_module: Option<Module>, body: &impl ast::ModuleItemOwner) {
         for item_or_macro in body.items_with_macros() {
             match item_or_macro {
@@ -133,8 +143,8 @@ impl RawItems {
         };
         if let Some(name) = name {
             let name = name.as_name();
-            let source_item_id = unimplemented!();
-            let def = self.defs.alloc(DefData { name, kind, source_item_id });
+            let source_item_id = self.source_file_items.id_of_unchecked(item.syntax());
+            let def = self.raw_items.defs.alloc(DefData { name, kind, source_item_id });
             self.push_item(current_module, RawItem::Def(def))
         }
     }
@@ -145,9 +155,10 @@ impl RawItems {
             None => return,
         };
         let item = if module.has_semi() {
-            self.modules.alloc(ModuleData::Declaration { name })
+            self.raw_items.modules.alloc(ModuleData::Declaration { name })
         } else if let Some(item_list) = module.item_list() {
-            let item = self.modules.alloc(ModuleData::Definition { name, items: Vec::new() });
+            let item =
+                self.raw_items.modules.alloc(ModuleData::Definition { name, items: Vec::new() });
             self.process_module(Some(item), item_list);
             item
         } else {
@@ -162,7 +173,7 @@ impl RawItems {
             .any(|attr| attr.as_atom().map(|s| s == "prelude_import").unwrap_or(false));
 
         Path::expand_use_item(use_item, |path, segment, alias| {
-            let import = self.imports.alloc(ImportData {
+            let import = self.raw_items.imports.alloc(ImportData {
                 path,
                 alias,
                 is_glob: segment.is_none(),
@@ -179,18 +190,18 @@ impl RawItems {
             let arg = mbe::ast_to_token_tree(tt)?.0;
             Some((path, arg))
         })() {
-            let m = self.macros.alloc(MacroData { path, arg });
+            let m = self.raw_items.macros.alloc(MacroData { path, arg });
             self.push_item(current_module, RawItem::Macro(m));
         }
     }
 
     fn push_item(&mut self, current_module: Option<Module>, item: RawItem) {
         match current_module {
-            Some(module) => match &mut self.modules[module] {
+            Some(module) => match &mut self.raw_items.modules[module] {
                 ModuleData::Definition { items, .. } => items,
                 ModuleData::Declaration { .. } => unreachable!(),
             },
-            None => &mut self.items,
+            None => &mut self.raw_items.items,
         }
         .push(item)
     }
