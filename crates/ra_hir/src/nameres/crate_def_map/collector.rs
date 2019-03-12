@@ -18,7 +18,13 @@ pub(crate) fn crate_def_map_query(
     db: &impl PersistentHirDatabase,
     krate: Crate,
 ) -> Arc<CrateDefMap> {
-    let mut collector = DefCollector { db, krate, def_map: CrateDefMap::default() };
+    let mut collector = DefCollector {
+        db,
+        krate,
+        def_map: CrateDefMap::default(),
+        unresolved_imports: Vec::new(),
+        unexpanded_macros: Vec::new(),
+    };
     collector.collect();
     let def_map = collector.finish();
     Arc::new(def_map)
@@ -28,6 +34,8 @@ struct DefCollector<DB> {
     db: DB,
     krate: Crate,
     def_map: CrateDefMap,
+    unresolved_imports: Vec<(ModuleId, raw::Import)>,
+    unexpanded_macros: Vec<(ModuleId, raw::Macro)>,
 }
 
 struct ModCollector<'a, D> {
@@ -91,9 +99,13 @@ where
                         .collect(&*raw_items.items)
                     }
                 },
-                raw::RawItem::Import(_im) => {}
+                raw::RawItem::Import(import) => {
+                    self.def_collector.unresolved_imports.push((self.module_id, import))
+                }
+                raw::RawItem::Macro(mac) => {
+                    self.def_collector.unexpanded_macros.push((self.module_id, mac))
+                }
                 raw::RawItem::Def(def) => self.define_def(&self.raw_items[def]),
-                raw::RawItem::Macro(_mac) => {}
             }
         }
     }
