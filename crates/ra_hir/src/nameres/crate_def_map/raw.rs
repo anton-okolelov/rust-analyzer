@@ -5,7 +5,10 @@ use ra_syntax::{
     ast::{self, ModuleItemOwner, NameOwner, AttrsOwner},
 };
 
-use crate::{PersistentHirDatabase, Name, AsName, Path};
+use crate::{
+    PersistentHirDatabase, Name, AsName, Path,
+    ids::SourceFileItemId,
+};
 
 #[derive(Default, PartialEq, Eq)]
 struct RawItems {
@@ -60,6 +63,7 @@ impl_arena_id!(Def);
 #[derive(PartialEq, Eq)]
 struct DefData {
     name: Name,
+    source_item_id: SourceFileItemId,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,6 +87,7 @@ impl RawItems {
     fn process_module(&mut self, current_module: Option<Module>, body: &impl ast::ModuleItemOwner) {
         for item_or_macro in body.items_with_macros() {
             match item_or_macro {
+                ast::ItemOrMacro::Macro(m) => self.add_macro(current_module, m),
                 ast::ItemOrMacro::Item(item) => match item.kind() {
                     ast::ModuleItemKind::Module(module) => self.add_module(current_module, module),
                     ast::ModuleItemKind::UseItem(use_item) => {
@@ -93,12 +98,12 @@ impl RawItems {
                     ast::ModuleItemKind::FnDef(_) => (),
                     ast::ModuleItemKind::TraitDef(_) => (),
                     ast::ModuleItemKind::TypeAliasDef(_) => (),
-                    ast::ModuleItemKind::ImplBlock(_) => (),
-                    ast::ModuleItemKind::ExternCrateItem(_) => (),
                     ast::ModuleItemKind::ConstDef(_) => (),
                     ast::ModuleItemKind::StaticDef(_) => (),
+
+                    ast::ModuleItemKind::ExternCrateItem(_) => (),
+                    ast::ModuleItemKind::ImplBlock(_) => (),
                 },
-                ast::ItemOrMacro::Macro(m) => self.add_macro(current_module, m),
             }
         }
     }
