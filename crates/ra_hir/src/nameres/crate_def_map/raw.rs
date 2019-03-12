@@ -13,13 +13,25 @@ use crate::{
 };
 
 #[derive(Default, PartialEq, Eq)]
-struct RawItems {
+pub(crate) struct RawItems {
     modules: Arena<Module, ModuleData>,
     imports: Arena<Import, ImportData>,
     defs: Arena<Def, DefData>,
     macros: Arena<Macro, MacroData>,
 
     items: Vec<RawItem>,
+}
+
+impl RawItems {
+    pub(crate) fn raw_items_query(db: &impl PersistentHirDatabase, file_id: FileId) -> RawItems {
+        let mut collector = RawItemsCollector {
+            raw_items: RawItems::default(),
+            source_file_items: db.file_items(file_id.into()),
+        };
+        let source_file = db.parse(file_id);
+        collector.process_module(None, &*source_file);
+        collector.raw_items
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -88,16 +100,6 @@ impl_arena_id!(Macro);
 struct MacroData {
     path: Path,
     arg: tt::Subtree,
-}
-
-fn raw_items_query(db: &impl PersistentHirDatabase, file_id: FileId) -> RawItems {
-    let mut collector = RawItemsCollector {
-        raw_items: RawItems::default(),
-        source_file_items: db.file_items(file_id.into()),
-    };
-    let source_file = db.parse(file_id);
-    collector.process_module(None, &*source_file);
-    collector.raw_items
 }
 
 struct RawItemsCollector {
