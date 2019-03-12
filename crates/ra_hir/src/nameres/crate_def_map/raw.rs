@@ -64,6 +64,18 @@ impl_arena_id!(Def);
 struct DefData {
     name: Name,
     source_item_id: SourceFileItemId,
+    kind: DefKind,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum DefKind {
+    Function,
+    Struct,
+    Enum,
+    Const,
+    Static,
+    Trait,
+    TypeAlias,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,23 +100,42 @@ impl RawItems {
         for item_or_macro in body.items_with_macros() {
             match item_or_macro {
                 ast::ItemOrMacro::Macro(m) => self.add_macro(current_module, m),
-                ast::ItemOrMacro::Item(item) => match item.kind() {
-                    ast::ModuleItemKind::Module(module) => self.add_module(current_module, module),
-                    ast::ModuleItemKind::UseItem(use_item) => {
-                        self.add_use_item(current_module, use_item)
-                    }
-                    ast::ModuleItemKind::StructDef(_) => (),
-                    ast::ModuleItemKind::EnumDef(_) => (),
-                    ast::ModuleItemKind::FnDef(_) => (),
-                    ast::ModuleItemKind::TraitDef(_) => (),
-                    ast::ModuleItemKind::TypeAliasDef(_) => (),
-                    ast::ModuleItemKind::ConstDef(_) => (),
-                    ast::ModuleItemKind::StaticDef(_) => (),
-
-                    ast::ModuleItemKind::ExternCrateItem(_) => (),
-                    ast::ModuleItemKind::ImplBlock(_) => (),
-                },
+                ast::ItemOrMacro::Item(item) => self.add_item(current_module, item),
             }
+        }
+    }
+
+    fn add_item(&mut self, current_module: Option<Module>, item: &ast::ModuleItem) {
+        let (kind, name) = match item.kind() {
+            ast::ModuleItemKind::Module(module) => {
+                self.add_module(current_module, module);
+                return;
+            }
+            ast::ModuleItemKind::UseItem(use_item) => {
+                self.add_use_item(current_module, use_item);
+                return;
+            }
+            ast::ModuleItemKind::ExternCrateItem(_) => {
+                // FIXME: desugar to use
+                return;
+            }
+            ast::ModuleItemKind::ImplBlock(_) => {
+                // impls don't participate in name resolution
+                return;
+            }
+            ast::ModuleItemKind::StructDef(it) => (DefKind::Struct, it.name()),
+            ast::ModuleItemKind::EnumDef(it) => (DefKind::Enum, it.name()),
+            ast::ModuleItemKind::FnDef(it) => (DefKind::Function, it.name()),
+            ast::ModuleItemKind::TraitDef(it) => (DefKind::Trait, it.name()),
+            ast::ModuleItemKind::TypeAliasDef(it) => (DefKind::TypeAlias, it.name()),
+            ast::ModuleItemKind::ConstDef(it) => (DefKind::Const, it.name()),
+            ast::ModuleItemKind::StaticDef(it) => (DefKind::Static, it.name()),
+        };
+        if let Some(name) = name {
+            let name = name.as_name();
+            let source_item_id = unimplemented!();
+            let def = self.defs.alloc(DefData { name, kind, source_item_id });
+            self.push_item(current_module, RawItem::Def(def))
         }
     }
 
