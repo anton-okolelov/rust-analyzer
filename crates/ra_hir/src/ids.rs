@@ -200,8 +200,14 @@ pub(crate) trait AstItemDef<N: AstNode>: ArenaId + Clone {
     fn interner(interner: &HirInterner) -> &LocationIntener<ItemLoc<N>, Self>;
     fn from_ast(ctx: LocationCtx<&impl PersistentHirDatabase>, ast: &N) -> Self {
         let items = ctx.db.file_items(ctx.file_id);
-        let raw =
-            SourceItemId { file_id: ctx.file_id, item_id: items.id_of(ctx.file_id, ast.syntax()) };
+        let item_id = items.id_of(ctx.file_id, ast.syntax());
+        Self::from_source_item_id_unchecked(ctx, item_id)
+    }
+    fn from_source_item_id_unchecked(
+        ctx: LocationCtx<&impl PersistentHirDatabase>,
+        item_id: SourceFileItemId,
+    ) -> Self {
+        let raw = SourceItemId { file_id: ctx.file_id, item_id };
         let loc = ItemLoc { module: ctx.module, raw, _ty: PhantomData };
 
         Self::interner(ctx.db.as_ref()).loc2id(&loc)

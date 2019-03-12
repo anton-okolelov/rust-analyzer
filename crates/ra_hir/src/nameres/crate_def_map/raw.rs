@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    ops::Index,
+};
 
 use ra_db::FileId;
 use ra_arena::{Arena, impl_arena_id, RawId, map::ArenaMap};
@@ -19,7 +22,7 @@ pub(crate) struct RawItems {
     defs: Arena<Def, DefData>,
     macros: Arena<Macro, MacroData>,
 
-    items: Vec<RawItem>,
+    pub(crate) items: Vec<RawItem>,
 }
 
 impl RawItems {
@@ -34,13 +37,41 @@ impl RawItems {
     }
 }
 
+impl Index<Module> for RawItems {
+    type Output = ModuleData;
+    fn index(&self, idx: Module) -> &ModuleData {
+        &self.modules[idx]
+    }
+}
+
+impl Index<Import> for RawItems {
+    type Output = ImportData;
+    fn index(&self, idx: Import) -> &ImportData {
+        &self.imports[idx]
+    }
+}
+
+impl Index<Def> for RawItems {
+    type Output = DefData;
+    fn index(&self, idx: Def) -> &DefData {
+        &self.defs[idx]
+    }
+}
+
+impl Index<Macro> for RawItems {
+    type Output = MacroData;
+    fn index(&self, idx: Macro) -> &MacroData {
+        &self.macros[idx]
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct RawItemsSourceMap {
     imports: ArenaMap<Import, AstPtr<ast::PathSegment>>,
 }
 
 #[derive(PartialEq, Eq)]
-enum RawItem {
+pub(crate) enum RawItem {
     Module(Module),
     Import(Import),
     Def(Def),
@@ -48,21 +79,21 @@ enum RawItem {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Module(RawId);
+pub(crate) struct Module(RawId);
 impl_arena_id!(Module);
 
 #[derive(PartialEq, Eq)]
-enum ModuleData {
+pub(crate) enum ModuleData {
     Declaration { name: Name },
     Definition { name: Name, items: Vec<RawItem> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Import(RawId);
+pub(crate) struct Import(RawId);
 impl_arena_id!(Import);
 
 #[derive(PartialEq, Eq)]
-struct ImportData {
+pub(crate) struct ImportData {
     path: Path,
     alias: Option<Name>,
     is_glob: bool,
@@ -71,18 +102,18 @@ struct ImportData {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Def(RawId);
+pub(crate) struct Def(RawId);
 impl_arena_id!(Def);
 
 #[derive(PartialEq, Eq)]
-struct DefData {
-    name: Name,
-    source_item_id: SourceFileItemId,
-    kind: DefKind,
+pub(crate) struct DefData {
+    pub(crate) name: Name,
+    pub(crate) source_item_id: SourceFileItemId,
+    pub(crate) kind: DefKind,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum DefKind {
+pub(crate) enum DefKind {
     Function,
     Struct,
     Enum,
@@ -93,11 +124,11 @@ enum DefKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Macro(RawId);
+pub(crate) struct Macro(RawId);
 impl_arena_id!(Macro);
 
 #[derive(PartialEq, Eq)]
-struct MacroData {
+pub(crate) struct MacroData {
     path: Path,
     arg: tt::Subtree,
 }

@@ -74,7 +74,7 @@
 /// on `CrateDefMap` query, so using it from `CrateDefMap` will lead to cycle.
 
 mod raw;
-// mod collector;
+mod collector;
 
 use std::sync::Arc;
 
@@ -83,19 +83,20 @@ use ra_db::FileId;
 use ra_arena::{Arena, ArenaId, impl_arena_id, RawId};
 use ra_syntax::{AstNode, ast::{self, ModuleItemOwner}};
 
-use crate::{Crate, PersistentHirDatabase, HirFileId, Name};
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct ModuleIndex(RawId);
-impl_arena_id!(ModuleIndex);
+use crate::{Crate, PersistentHirDatabase, HirFileId, Name,
+ module_tree::ModuleId,
+ nameres::ModuleScope,
+};
 
 #[derive(Default)]
 struct ModuleData {
-    children: FxHashMap<Name, ModuleIndex>,
+    parent: Option<ModuleId>,
+    children: FxHashMap<Name, ModuleId>,
+    scope: ModuleScope,
 }
 
 /// Contans all top-level defs from a macro-expanded crate
 #[derive(Default)]
 pub(crate) struct CrateDefMap {
-    modules: Arena<ModuleIndex, ModuleData>,
+    modules: Arena<ModuleId, ModuleData>,
 }
