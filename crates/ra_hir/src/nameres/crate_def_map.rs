@@ -76,11 +76,9 @@
 mod raw;
 mod collector;
 
-use std::sync::Arc;
-
 use rustc_hash::FxHashMap;
 use ra_db::FileId;
-use ra_arena::{Arena, ArenaId, impl_arena_id, RawId};
+use ra_arena::{Arena, impl_arena_id, RawId};
 use ra_syntax::{AstNode, ast::{self, ModuleItemOwner}};
 
 use crate::{Crate, PersistentHirDatabase, HirFileId, Name,

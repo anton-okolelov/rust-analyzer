@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 use ra_db::FileId;
-use ra_arena::{Arena, ArenaId, impl_arena_id, RawId};
 use ra_syntax::{AstNode, ast::{self, ModuleItemOwner}};
 
 use crate::{
     Function, Module, Struct, Enum, Const, Static, Trait, TypeAlias,
-    Crate, PersistentHirDatabase, HirFileId, Name,
+    Crate, PersistentHirDatabase, HirFileId, Name, PathKind, Path,
+    KnownName,
     nameres::{Resolution, PerNs, ModuleDef},
-    ids::{AstItemDef, LocationCtx},
+    ids::{AstItemDef, LocationCtx, MacroCallLoc, SourceItemId},
 };
 
 use super::{CrateDefMap, ModuleId, ModuleData, raw};
@@ -24,6 +24,7 @@ pub(crate) fn crate_def_map_query(
         def_map: CrateDefMap::default(),
         unresolved_imports: Vec::new(),
         unexpanded_macros: Vec::new(),
+        global_macro_scope: FxHashMap::default(),
     };
     collector.collect();
     let def_map = collector.finish();
@@ -36,12 +37,13 @@ struct DefCollector<DB> {
     def_map: CrateDefMap,
     unresolved_imports: Vec<(ModuleId, raw::Import)>,
     unexpanded_macros: Vec<(ModuleId, raw::Macro)>,
+    global_macro_scope: FxHashMap<Name, mbe::MacroRules>,
 }
 
 struct ModCollector<'a, D> {
     def_collector: D,
     module_id: ModuleId,
-    file_id: FileId,
+    file_id: HirFileId,
     raw_items: &'a raw::RawItems,
 }
 
@@ -54,8 +56,19 @@ where
         let file_id = crate_graph.crate_root(self.krate.crate_id());
         let raw_items = raw::RawItems::raw_items_query(self.db, file_id);
         let module_id = self.alloc_module();
-        ModCollector { def_collector: &mut *self, module_id, file_id, raw_items: &raw_items }
-            .collect(&raw_items.items);
+        ModCollector {
+            def_collector: &mut *self,
+            module_id,
+            file_id: file_id.into(),
+            raw_items: &raw_items,
+        }
+        .collect(&raw_items.items);
+    }
+
+    fn define_macro(&mut self, name: Name, tt: &tt::Subtree) {
+        if let Ok(rules) = mbe::MacroRules::parse(tt) {
+            self.global_macro_scope.insert(name, rules);
+        }
     }
 
     fn alloc_module(&mut self) -> ModuleId {
@@ -93,7 +106,7 @@ where
                         ModCollector {
                             def_collector: &mut *self.def_collector,
                             module_id,
-                            file_id,
+                            file_id: file_id.into(),
                             raw_items: &raw_items,
                         }
                         .collect(&*raw_items.items)
@@ -102,10 +115,8 @@ where
                 raw::RawItem::Import(import) => {
                     self.def_collector.unresolved_imports.push((self.module_id, import))
                 }
-                raw::RawItem::Macro(mac) => {
-                    self.def_collector.unexpanded_macros.push((self.module_id, mac))
-                }
                 raw::RawItem::Def(def) => self.define_def(&self.raw_items[def]),
+                raw::RawItem::Macro(mac) => self.collect_macro(mac, &self.raw_items[mac]),
             }
         }
     }
@@ -117,12 +128,12 @@ where
         res
     }
 
+    fn module(&self) -> Module {
+        Module { krate: self.def_collector.krate, module_id: self.module_id }
+    }
+
     fn define_def(&mut self, def: &raw::DefData) {
-        let ctx = LocationCtx::new(
-            self.def_collector.db,
-            Module { krate: self.def_collector.krate, module_id: self.module_id },
-            self.file_id.into(),
-        );
+        let ctx = LocationCtx::new(self.def_collector.db, self.module(), self.file_id.into());
         macro_rules! id {
             () => {
                 AstItemDef::from_source_item_id_unchecked(ctx, def.source_item_id)
@@ -144,4 +155,57 @@ where
         let resolution = Resolution { def, import: None };
         self.def_collector.def_map.modules[self.module_id].scope.items.insert(name, resolution);
     }
+
+    fn collect_macro(&mut self, mac_id: raw::Macro, mac: &raw::MacroData) {
+        // Case 1: macro rules, define a macro in crate-global mutable scope
+        if is_macro_rules(&mac.path) {
+            if let Some(name) = &mac.name {
+                self.def_collector.define_macro(name.clone(), &mac.arg)
+            }
+            return;
+        }
+        // Case 2: try to expand macro_rules from this crate, triggering
+        // recursive item collection.
+        if let Some(rules) =
+            mac.path.as_ident().and_then(|name| self.def_collector.global_macro_scope.get(name))
+        {
+            if let Ok(tt) = rules.expand(&mac.arg) {
+                // XXX: this **does not** go through a database, because we
+                // can't identify macro_call without adding the whole state of
+                // name resolution as a parameter to the query.
+                //
+                // So, we run the queries "manually" and we should maintain the
+                // invariant that, when phases after the name resolution execute
+                // queries to get parse tree for macro expansion, thouse phases
+                // get the equivalent results.
+                //
+                // To put in other way, do to salsa model limitation (no cyclic
+                // queries), we expand each macro twice: first, when doing name
+                // resolution, and than, later, when we want to inspect it's
+                // body closer.
+                let source_item_id =
+                    SourceItemId { file_id: self.file_id.into(), item_id: mac.source_item_id };
+                let macro_call_id = MacroCallLoc { module: self.module(), source_item_id }
+                    .id(self.def_collector.db);
+                let file_id: HirFileId = macro_call_id.into();
+                let source_file = mbe::token_tree_to_ast_item_list(&tt);
+                let raw_items = raw::RawItems::from_source_file(&source_file, file_id);
+                ModCollector {
+                    def_collector: &mut *self.def_collector,
+                    file_id,
+                    module_id: self.module_id,
+                    raw_items: &raw_items,
+                }
+                .collect(&raw_items.items)
+            }
+            return;
+        }
+
+        // Case 3: path to a macro from another crate, expand during name resolution
+        self.def_collector.unexpanded_macros.push((self.module_id, mac_id))
+    }
+}
+
+fn is_macro_rules(path: &Path) -> bool {
+    path.as_ident().and_then(Name::as_known_name) == Some(KnownName::MacroRules)
 }

@@ -6,12 +6,12 @@ use std::{
 use ra_db::FileId;
 use ra_arena::{Arena, impl_arena_id, RawId, map::ArenaMap};
 use ra_syntax::{
-    AstPtr, AstNode,
+    AstPtr, AstNode, SourceFile,
     ast::{self, ModuleItemOwner, NameOwner, AttrsOwner},
 };
 
 use crate::{
-    PersistentHirDatabase, Name, AsName, Path,
+    PersistentHirDatabase, Name, AsName, Path, HirFileId,
     ids::{SourceFileItemId, SourceFileItems},
 };
 
@@ -32,6 +32,15 @@ impl RawItems {
             source_file_items: db.file_items(file_id.into()),
         };
         let source_file = db.parse(file_id);
+        collector.process_module(None, &*source_file);
+        collector.raw_items
+    }
+    pub(crate) fn from_source_file(source_file: &SourceFile, file_id: HirFileId) -> RawItems {
+        let source_file_items = SourceFileItems::from_source_file(source_file, file_id);
+        let mut collector = RawItemsCollector {
+            raw_items: RawItems::default(),
+            source_file_items: Arc::new(source_file_items),
+        };
         collector.process_module(None, &*source_file);
         collector.raw_items
     }
@@ -107,8 +116,8 @@ impl_arena_id!(Def);
 
 #[derive(PartialEq, Eq)]
 pub(crate) struct DefData {
-    pub(crate) name: Name,
     pub(crate) source_item_id: SourceFileItemId,
+    pub(crate) name: Name,
     pub(crate) kind: DefKind,
 }
 
@@ -129,8 +138,10 @@ impl_arena_id!(Macro);
 
 #[derive(PartialEq, Eq)]
 pub(crate) struct MacroData {
-    path: Path,
-    arg: tt::Subtree,
+    pub(crate) source_item_id: SourceFileItemId,
+    pub(crate) path: Path,
+    pub(crate) name: Option<Name>,
+    pub(crate) arg: tt::Subtree,
 }
 
 struct RawItemsCollector {
@@ -223,7 +234,9 @@ impl RawItemsCollector {
             let arg = mbe::ast_to_token_tree(tt)?.0;
             Some((path, arg))
         })() {
-            let m = self.raw_items.macros.alloc(MacroData { path, arg });
+            let name = m.name().map(|it| it.as_name());
+            let source_item_id = self.source_file_items.id_of_unchecked(m.syntax());
+            let m = self.raw_items.macros.alloc(MacroData { source_item_id, path, arg, name });
             self.push_item(current_module, RawItem::Macro(m));
         }
     }
